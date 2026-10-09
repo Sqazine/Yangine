@@ -1,0 +1,17 @@
+{
+  "name": "Yangine",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "WebGPU + TypeScript deferred rendering pipeline (opaque, transparent, shadows, bloom, TAA)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.40",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11"
+  }
+}
