@@ -7,7 +7,16 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "verify:wgsl": "python tools/validate_wgsl.py",
+    "verify:pipelines": "python tools/validate_pipelines.py",
+    "verify:layout": "python tools/verify_layout.py",
+    "verify:winding": "esbuild tools/verify_winding.mjs --bundle --platform=node --format=esm --outfile=node_modules/.cache/verify_winding.mjs && node node_modules/.cache/verify_winding.mjs",
+    "verify:csm": "esbuild tools/verify_csm.mjs --bundle --platform=node --format=esm --outfile=node_modules/.cache/verify_csm.mjs && node node_modules/.cache/verify_csm.mjs",
+    "verify:lights": "esbuild tools/verify_lights.mjs --bundle --platform=node --format=esm --outfile=node_modules/.cache/verify_lights.mjs && node node_modules/.cache/verify_lights.mjs",
+    "verify:ao": "esbuild tools/verify_ao.mjs --bundle --platform=node --format=esm --outfile=node_modules/.cache/verify_ao.mjs && node node_modules/.cache/verify_ao.mjs",
+    "verify": "npm run typecheck && npm run verify:wgsl && npm run verify:pipelines && npm run verify:layout && npm run verify:winding && npm run verify:csm && npm run verify:lights && npm run verify:ao"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.40",

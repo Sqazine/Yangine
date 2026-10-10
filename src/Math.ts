@@ -47,6 +47,168 @@ export function mat4Perspective(
   return m;
 }
 
+/**
+ * 正交投影（WebGPU 约定：z_ndc ∈ [0,1]，z_view = -distance）。
+ * near/far 传入的是沿 -Z 的距离，映射后 near→0、far→1。
+ */
+export function mat4Ortho(
+  l: number,
+  r: number,
+  b: number,
+  t: number,
+  near: number,
+  far: number
+): Mat4 {
+  const m = new Float32Array(16);
+  m[0] = 2 / (r - l);
+  m[5] = 2 / (t - b);
+  m[10] = 1 / (near - far);
+  m[12] = -(r + l) / (r - l);
+  m[13] = -(t + b) / (t - b);
+  m[14] = near / (near - far);
+  m[15] = 1;
+  return m;
+}
+
+/**
+ * Practical split scheme（Lauritzen）：对数分布与均匀分布按 lambda 混合，
+ * 兼顾近处精度与远处覆盖。返回 count 个级联的**结束**距离。
+ */
+export function splitCascadeDistances(
+  near: number,
+  far: number,
+  count: number,
+  lambda = 0.75
+): number[] {
+  const out: number[] = [];
+  const ratio = far / near;
+  for (let i = 1; i <= count; i++) {
+    const p = i / count;
+    const logD = near * Math.pow(ratio, p);
+    const uniD = near + (far - near) * p;
+    out.push(lambda * logD + (1 - lambda) * uniD);
+  }
+  out[out.length - 1] = far;
+  return out;
+}
+
+/**
+ * 把「级联结束距离」展开成每级联的 [near, far]，并给出写入帧 uniform 的远界数组。
+ *
+ * 三处约定必须**成对**出现（历史上这里出过一次 off-by-one，后果是远处整片阴影静默消失）：
+ *   · splits[c] = 级联 c 的**远界**
+ *   · bounds[c] = { n: splits[c-1], f: splits[c] }，splits[-1] 取 near —— 级联矩阵由它构建
+ *   · 选取：viewDepth ≤ splits[c] 的最小 c（见 selectCascade）
+ * 不能一边把 splits[c] 当远界（建矩阵时）、另一边当近界（选级联时）。
+ */
+export function cascadeBounds(
+  near: number,
+  far: number,
+  count: number,
+  lambda = 0.7
+): { bounds: { n: number; f: number }[]; splits: number[] } {
+  const splits = splitCascadeDistances(near, far, count, lambda);
+  const bounds: { n: number; f: number }[] = [];
+  let prev = near;
+  for (let c = 0; c < count; c++) {
+    bounds.push({ n: prev, f: splits[c] });
+    prev = splits[c];
+  }
+  return { bounds, splits };
+}
+
+/**
+ * 视深度 → 级联索引：第一个满足 viewDepth ≤ splits[c] 的 c；超出最远级联时兜底到 count-1。
+ * 必须与 WGSL 侧 shadowCascade() 的选择循环语义一致 —— tools/verify_csm.mjs 会做 CPU/GPU 对拍。
+ */
+export function selectCascade(viewDepth: number, splits: ArrayLike<number>, count: number): number {
+  for (let c = 0; c < count; c++) {
+    if (viewDepth <= splits[c]) return c;
+  }
+  return Math.max(0, count - 1);
+}
+
+/**
+ * CSM 级联的正交矩阵：以视锥切片的包围球为范围，按 texel 网格对齐以消除相机移动时的边缘爬行。
+ *
+ * 约定：包围球半径即正交框的横向半宽，所以切片 8 个角点必须全部落在单位立方体内 ——
+ * tools/verify_csm.mjs 会逐角点验证这一点。一旦半径算错或对齐偏移过大，
+ * 切片边缘会落到正交框外，该处阴影直接消失。
+ */
+export function cascadeMatrix(
+  lightDir: Vec3,
+  center: Vec3,
+  radius: number,
+  texelSize: number
+): { vp: Mat4; center: Vec3; radius: number } {
+  const back: Vec3 = [
+    center[0] - lightDir[0] * radius * 3,
+    center[1] - lightDir[1] * radius * 3,
+    center[2] - lightDir[2] * radius * 3,
+  ];
+  // 接近垂直时改用 Z 轴作 up，避免 lookAt 叉积退化
+  const up: Vec3 = Math.abs(lightDir[1]) > 0.98 ? [0, 0, 1] : [0, 1, 0];
+  const view = mat4LookAt(back, center, up);
+
+  // 把包围球中心投到光空间，按 texel 网格对齐
+  const c = [center[0], center[1], center[2], 1];
+  const vx = view[0] * c[0] + view[4] * c[1] + view[8] * c[2] + view[12];
+  const vy = view[1] * c[0] + view[5] * c[1] + view[9] * c[2] + view[13];
+  const snappedX = Math.round(vx / texelSize) * texelSize;
+  const snappedY = Math.round(vy / texelSize) * texelSize;
+
+  // 反算对齐后的世界空间中心
+  const snappedCenter: Vec3 = [
+    center[0] + view[0] * (snappedX - vx) + view[1] * (snappedY - vy),
+    center[1] + view[4] * (snappedX - vx) + view[5] * (snappedY - vy),
+    center[2] + view[8] * (snappedX - vx) + view[9] * (snappedY - vy),
+  ];
+  const snappedBack: Vec3 = [
+    snappedCenter[0] - lightDir[0] * radius * 3,
+    snappedCenter[1] - lightDir[1] * radius * 3,
+    snappedCenter[2] - lightDir[2] * radius * 3,
+  ];
+  const snappedView = mat4LookAt(snappedBack, snappedCenter, up);
+  const proj = mat4Ortho(-radius, radius, -radius, radius, 0.1, radius * 6 + 10);
+  return { vp: mat4Multiply(proj, snappedView), center: snappedCenter, radius };
+}
+
+/** 立方体阴影的六个面法线，顺序与着色器 dirToCubeUV 的 face 索引一致。 */
+export const CUBE_FACE_NORMALS: Vec3[] = [
+  [1, 0, 0],
+  [-1, 0, 0],
+  [0, 1, 0],
+  [0, -1, 0],
+  [0, 0, 1],
+  [0, 0, -1],
+];
+
+/** 立方体六面的参考 up（实际传入 mat4LookAt 时取负，见 cubeFaceView）。 */
+export const CUBE_FACE_UPS: Vec3[] = [
+  [0, -1, 0],
+  [0, -1, 0],
+  [0, 0, 1],
+  [0, 0, -1],
+  [0, -1, 0],
+  [0, -1, 0],
+];
+
+/**
+ * 立方体某一面的 view 矩阵。
+ * up 需要取负：渲染到 2D array 后，纹理 v 轴（向下）与立方体映射约定反向，
+ * 传入 -up 可让 NDC.y 与 (tc/ma+1)/2 直接对齐，省掉采样端的翻转。
+ */
+export function cubeFaceView(face: number, position: Vec3, distance: number): Mat4 {
+  const n = CUBE_FACE_NORMALS[face];
+  const up = CUBE_FACE_UPS[face];
+  const eye: Vec3 = [
+    position[0] + n[0] * distance,
+    position[1] + n[1] * distance,
+    position[2] + n[2] * distance,
+  ];
+  return mat4LookAt(eye, position, [-up[0], -up[1], -up[2]]);
+}
+
 export function mat4LookAt(eye: Vec3, center: Vec3, up: Vec3): Mat4 {
   const z = vec3Normalize(vec3Sub(eye, center)); // 指向相机后方
   const x = vec3Normalize(vec3Cross(up, z));

@@ -1,12 +1,20 @@
 struct Frame {
   viewProj      : mat4x4<f32>,
   prevViewProj  : mat4x4<f32>,
-  lightViewProj : mat4x4<f32>,
   invViewProj   : mat4x4<f32>,
+  view          : mat4x4<f32>,
+  proj          : mat4x4<f32>,
+  invProj       : mat4x4<f32>,
   camPos        : vec4<f32>,
-  lightDir      : vec4<f32>,
-  lightColor    : vec4<f32>,
-  params        : vec4<f32>,
+  camFwd        : vec4<f32>,
+  sunDir        : vec4<f32>,
+  sunColor      : vec4<f32>,
+  params        : vec4<f32>,  // x=lightCount y=camNear z=camFar w=time
+  csmSplits     : vec4<f32>,  // 各级联远界（世界距离）
+  screen        : vec4<f32>,  // w h 1/w 1/h
+  aoParams      : vec4<f32>,  // x=radius y=intensity z=power w=noiseSeed
+  misc          : vec4<f32>,  // x=renderPath y=aoMethod z=tileSizeX w=tileSizeY
+  gridParams    : vec4<f32>,  // x=tilesX y=tilesY z=lightsPerTile w=pad
 };
 struct ObjectU {
   model        : mat4x4<f32>,

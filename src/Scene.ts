@@ -10,7 +10,9 @@ import {
   mat4TRS,
   vec3Add,
   vec3Normalize,
+  vec3Sub,
 } from "./Math";
+import { Light } from "./Lights";
 
 export interface Mesh {
   vertices: Float32Array; // 交错: [px,py,pz, nx,ny,nz, u,v]
@@ -39,13 +41,28 @@ export interface Renderable {
 
 export class Scene {
   objects: Renderable[] = [];
+  lights: Light[] = [];
 
   add(r: Renderable) {
     this.objects.push(r);
   }
+
+  addLight(l: Light) {
+    this.lights.push(l);
+  }
 }
 
 // ---------- 几何体生成 ----------
+//
+// 【绕序约定】三个生成器必须统一：三角形按右手法则算出的几何法线
+//   N_geo = normalize(cross(v1 − v0, v2 − v0))
+// 必须与三个顶点的法线属性指向同一侧。两个方向各管一件事，缺一不可：
+//   · 顶点法线 → 光照（着色器里 obj.normalMatrix 变换后直接用）
+//   · 绕序     → 背面剔除（pGeometry / pPrepass / pForwardPlus 都是 cullMode:"back"）
+// 两者不一致时的症状很反直觉：**物体直接从外面消失**（被剔除），而不是变黑或变暗。
+// 因此它极易被误诊成材质、深度或光照问题，而根因只是几个顶点的排列顺序。
+// 不透明物体务必走 tools/verify_winding.mjs 的检查；透明物体虽然用 cullMode:"none"
+// 掩盖了剔除症状，但那只是把 bug 藏起来，不是修好。
 
 function buildMesh(
   positions: number[],
@@ -109,7 +126,10 @@ export function makePlane(size = 20): Mesh {
   ];
   const n = [0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0];
   const u = [0, 0, 1, 0, 1, 1, 0, 1];
-  const idx = [0, 1, 2, 0, 2, 3];
+  // 绕序必须与 +Y 的顶点法线同向：0→2→1 / 0→3→2。
+  // 写成自然顺序 0→1→2 / 0→2→3 时几何法线是 -Y，地面会在 cullMode:"back" 下
+  // 从上方被整片剔除——地面「看不见」而不是「变黑」。
+  const idx = [0, 2, 1, 0, 3, 2];
   return buildMesh(p, n, u, idx);
 }
 
@@ -139,7 +159,10 @@ export function makeSphere(radius = 1, segments = 32, rings = 24): Mesh {
       const b = a + 1;
       const c = a + stride;
       const d = c + 1;
-      idx.push(a, c, b, b, c, d);
+      // 绕序必须让几何法线朝外：a→b→c / b→d→c。
+      // 写成 a→c→b / b→c→d 会让整个球反面朝外。目前只有透明度管线
+      // (cullMode:"none") 用到球体，所以不会消失——但一旦被当不透明物体用就会整颗不见。
+      idx.push(a, b, c, b, d, c);
     }
   }
   return buildMesh(p, n, u, idx);
@@ -179,8 +202,9 @@ export class OrbitCamera {
     return mat4Multiply(this.proj(), this.view());
   }
 
+  /** 相机前向（eye → target 的单位向量）。CSM 的视深度与级联选择依赖它。 */
   forward(): Vec3 {
-    return vec3Normalize(vec3Add(this.target, [-this.eye()[0], -this.eye()[1], -this.eye()[2]]));
+    return vec3Normalize(vec3Sub(this.target, this.eye()));
   }
 }
 

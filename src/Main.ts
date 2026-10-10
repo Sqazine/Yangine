@@ -1,12 +1,45 @@
 // 入口：初始化 WebGPU、构建演示场景、处理输入与渲染循环。
 
 import { initWebGPU } from "./Gpu";
-import { OrbitCamera, Renderable, Scene, makeCube, makePlane, makeSphere } from "./Scene";
-import { Renderer } from "./Renderer";
+import { OrbitCamera, Scene, makeCube, makePlane, makeSphere } from "./Scene";
+import {
+  AO_METHODS,
+  AoMethod,
+  RENDER_PATHS,
+  RenderPath,
+  Renderer,
+} from "./Renderer";
+import {
+  LIGHT_TYPE_DIRECTIONAL,
+  LIGHT_TYPE_POINT,
+  LIGHT_TYPE_SPOT,
+} from "./Lights";
 
 const canvas = document.getElementById("app") as HTMLCanvasElement;
 const hud = document.getElementById("hud") as HTMLDivElement;
+const panel = document.getElementById("panel") as HTMLDivElement;
 const errEl = document.getElementById("err") as HTMLDivElement;
+
+const AO_LABEL: Record<AoMethod, string> = {
+  off: "关闭",
+  ssao: "SSAO",
+  hbao: "HBAO",
+  hbaoplus: "HBAO+",
+  gtao: "GTAO",
+};
+const PATH_LABEL: Record<RenderPath, string> = {
+  forward: "Forward",
+  "forward+": "Forward+",
+  deferred: "Deferred",
+  "tiled-deferred": "Tiled Deferred",
+};
+/** 每条路径的通道顺序（HUD 显示用）。 */
+const PATH_ORDER: Record<RenderPath, string> = {
+  forward: "阴影→AO(强制关)→前向着色(含velocity)→透明→TAA→Bloom→合成",
+  "forward+": "阴影→前置通道→AO→分块剔除→前向着色→透明→TAA→Bloom→合成",
+  deferred: "阴影→G-buffer→AO→延迟光照→透明→TAA→Bloom→合成",
+  "tiled-deferred": "阴影→G-buffer→AO→分块剔除→延迟光照(分块)→透明→TAA→Bloom→合成",
+};
 
 function fail(msg: string) {
   errEl.style.display = "flex";
@@ -31,7 +64,7 @@ async function main() {
   const scene = new Scene();
   const cube = makeCube(1);
   const sphere = makeSphere(1, 40, 28);
-  const plane = makePlane(30);
+  const plane = makePlane(60);
 
   // 地面（不透明）
   scene.add({
@@ -121,7 +154,102 @@ async function main() {
     });
   });
 
+  // ---------- 光源：平行光(CSM) + 点光源(Cube) + 聚光灯 ----------
+  // 地面增大到 60 以覆盖 4 级级联的远端，保证远处仍有阴影细节
+  scene.addLight({
+    type: LIGHT_TYPE_DIRECTIONAL,
+    color: [1.0, 0.96, 0.86],
+    intensity: 3.0,
+    castShadow: true,
+    direction: [0.55, -1.0, 0.4],
+    cascades: 4,
+    cascadeBlend: 1.0,
+  });
+
+  scene.addLight({
+    type: LIGHT_TYPE_POINT,
+    color: [1.0, 0.62, 0.28],
+    intensity: 22.0,
+    castShadow: true,
+    position: [-7.5, 6.0, -6.5],
+    range: 22.0,
+  });
+
+  scene.addLight({
+    type: LIGHT_TYPE_SPOT,
+    color: [0.45, 0.72, 1.0],
+    intensity: 26.0,
+    castShadow: true,
+    position: [7.0, 8.5, 6.0],
+    direction: [-0.55, -1.0, -0.5],
+    range: 26.0,
+    innerAngle: (18 * Math.PI) / 180,
+    outerAngle: (34 * Math.PI) / 180,
+  });
+
   renderer.setScene(scene);
+
+  // ---------- 切换面板：渲染路径 + AO 算法 ----------
+  const pathButtons = new Map<RenderPath, HTMLButtonElement>();
+  const aoButtons = new Map<AoMethod, HTMLButtonElement>();
+
+  function syncPanel() {
+    pathButtons.forEach((b, k) => b.classList.toggle("on", k === renderer.renderPath));
+    aoButtons.forEach((b, k) => b.classList.toggle("on", k === renderer.aoMethod));
+  }
+
+  /** 建一个「标题 + 若干按钮」的分组。 */
+  function buildGroup<T>(title: string, items: T[], label: (v: T) => string): Map<T, HTMLButtonElement> {
+    const g = document.createElement("div");
+    g.className = "grp";
+    const l = document.createElement("span");
+    l.className = "lbl";
+    l.textContent = title;
+    g.appendChild(l);
+    panel.appendChild(g);
+
+    const map = new Map<T, HTMLButtonElement>();
+    for (const v of items) {
+      const b = document.createElement("button");
+      b.textContent = label(v);
+      g.appendChild(b);
+      map.set(v, b);
+    }
+    return map;
+  }
+
+  const pg = buildGroup("渲染路径（快捷键 P）", RENDER_PATHS, (p) => PATH_LABEL[p]);
+  pg.forEach((b, p) => {
+    b.onclick = () => {
+      renderer.setRenderPath(p);
+      syncPanel();
+    };
+    pathButtons.set(p, b);
+  });
+
+  const ag = buildGroup("环境光遮蔽（快捷键 O）", AO_METHODS, (m) => AO_LABEL[m]);
+  ag.forEach((b, m) => {
+    b.onclick = () => {
+      renderer.setAoMethod(m);
+      syncPanel();
+    };
+    aoButtons.set(m, b);
+  });
+
+  {
+    const g = document.createElement("div");
+    g.className = "grp";
+    const l = document.createElement("span");
+    l.className = "lbl";
+    l.textContent = "快捷键";
+    g.appendChild(l);
+    const t = document.createElement("span");
+    t.textContent = "P 路径 · O 算法 · [ ] 半径 · - = 强度";
+    g.appendChild(t);
+    panel.appendChild(g);
+  }
+
+  syncPanel();
 
   const camera = new OrbitCamera();
   camera.target = [0, 1, 0];
@@ -175,6 +303,27 @@ async function main() {
     { passive: false }
   );
 
+  // ---------- 快捷键 ----------
+  window.addEventListener("keydown", (e) => {
+    if (e.repeat) return;
+    const k = e.key.toLowerCase();
+    if (k === "p") {
+      renderer.cycleRenderPath();
+      syncPanel();
+    } else if (k === "o") {
+      renderer.cycleAoMethod();
+      syncPanel();
+    } else if (k === "[" || k === "]") {
+      // AO 半径：0.1 ~ 4.0（世界单位）
+      const step = k === "]" ? 1.12 : 1 / 1.12;
+      renderer.aoRadius = Math.min(4, Math.max(0.1, renderer.aoRadius * step));
+    } else if (k === "-" || k === "=") {
+      // AO 强度：0 ~ 2
+      const step = k === "=" ? 0.08 : -0.08;
+      renderer.aoIntensity = Math.min(2, Math.max(0, renderer.aoIntensity + step));
+    }
+  });
+
   // ---------- 渲染循环 ----------
   let start = performance.now();
   let last = start;
@@ -191,11 +340,24 @@ async function main() {
       frames = 0;
       last = now;
     }
+    const path = renderer.renderPath;
+    // 传统 Forward 没有 G-buffer，屏幕空间 AO 无深度/法线可读，AO 被强制关闭
+    const aoText =
+      path === "forward"
+        ? `AO: 不可用（Forward 无 G-buffer）`
+        : `AO: ${AO_LABEL[renderer.aoMethod]}  r=${renderer.aoRadius.toFixed(2)}  强度=${renderer.aoIntensity.toFixed(2)}`;
     hud.textContent =
-      `WebGPU 延迟渲染\n` +
+      `WebGPU ${PATH_LABEL[path]} 渲染\n` +
       `FPS: ${fps}\n` +
       `拖拽: 旋转  滚轮: 缩放\n` +
-      `通道: 阴影→G-buffer→光照→透明→TAA→Bloom→合成\n` +
+      `通道: ${PATH_ORDER[path]}\n` +
+      aoText +
+      `\n` +
+      `阴影: 平行光 4 级 CSM + 点光源 Cube + 聚光灯，均为 PCSS（半透不接收）\n` +
+      `光源角半径: ${(renderer.lightAngularSize * 1000).toFixed(0)} mrad\n` +
+      `光源: ${renderer.lightCount} 盏` +
+      (path === "forward" ? "（逐片元全遍历）" : path === "forward+" || path === "tiled-deferred" ? `（分块 ${renderer.tileGrid}）` : "（全屏全遍历）") +
+      `\n` +
       `分辨率: ${canvas.width}×${canvas.height} (DPR ${devicePixelRatio.toFixed(1)})`;
 
     requestAnimationFrame(frame);

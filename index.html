@@ -44,11 +44,56 @@
         padding: 24px;
         text-align: center;
       }
+      #panel {
+        position: fixed;
+        top: 8px;
+        right: 8px;
+        color: #ccc;
+        font-size: 12px;
+        line-height: 1.5;
+        background: rgba(0, 0, 0, 0.6);
+        padding: 8px 10px;
+        border-radius: 8px;
+        user-select: none;
+        max-width: 46vw;
+      }
+      #panel .grp {
+        margin-bottom: 6px;
+      }
+      #panel .grp:last-child {
+        margin-bottom: 0;
+      }
+      #panel .lbl {
+        color: #7af;
+        display: block;
+        margin-bottom: 3px;
+      }
+      #panel button {
+        font: inherit;
+        color: #aaa;
+        background: rgba(255, 255, 255, 0.07);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 4px;
+        padding: 2px 7px;
+        margin: 0 3px 3px 0;
+        cursor: pointer;
+      }
+      #panel button:hover {
+        color: #fff;
+        background: rgba(255, 255, 255, 0.14);
+      }
+      #panel button.on {
+        color: #0a0;
+        background: #6f6;
+        border-color: #6f6;
+        font-weight: 600;
+      }
     </style>
   </head>
   <body>
     <canvas id="app"></canvas>
     <div id="hud">initializing WebGPU…</div>
+    <div id="panel"></div>
     <div id="err"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

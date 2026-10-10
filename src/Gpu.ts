@@ -50,16 +50,17 @@ export function createBuffer(
   return buf;
 }
 
-/** 创建二维纹理（含全部常用 usage）。 */
+/** 创建二维纹理（含全部常用 usage）。depthOrArrayLayers > 1 时为 2D 数组纹理。 */
 export function createTexture(
   device: GPUDevice,
   width: number,
   height: number,
   format: GPUTextureFormat,
-  usage: GPUTextureUsageFlags
+  usage: GPUTextureUsageFlags,
+  depthOrArrayLayers = 1
 ): GPUTexture {
   return device.createTexture({
-    size: { width, height },
+    size: { width, height, depthOrArrayLayers },
     format,
     usage,
   });
